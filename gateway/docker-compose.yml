@@ -1,0 +1,34 @@
+version: "3.8"
+
+services:
+  adguardhome:
+    container_name: adguardhome
+    image: adguard/adguardhome:latest
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./adguard/work:/opt/adguardhome/work
+      - ./adguard/conf:/opt/adguardhome/conf
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  ntopng:
+    container_name: ntopng
+    image: ntop/ntopng:latest
+    restart: unless-stopped
+    network_mode: host
+    command:
+      - --community
+      - -i=eth1
+      - --http-port=3001
+      - -m=10.0.0.0/24
+    volumes:
+      - ./ntopng/data:/var/lib/ntopng
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
