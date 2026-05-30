@@ -1,4 +1,8 @@
-# Gateway — N100 串联网关 + 多层过滤
+# Gateway — N100 网关 + 多层过滤 (双网口 / 单网口)
+
+> **方案选择**:
+> - **双网口设备 (N100 软路由/多网口主机)**? 按下方主流程 (串联网关，推荐)
+> - **单网口设备 (旧电脑/NAS/树莓派)**? 跳转到 [单网口旁路网关方案](#单网口旁路网关方案)
 
 ## 项目背景
 
@@ -61,11 +65,16 @@
 ```
 /opt/gateway/
 ├── docker-compose.yml
-├── nftables.conf
+├── nftables.conf              # 双网口防火墙规则
+├── nftables-single-nic.conf   # 单网口防火墙规则
 ├── scripts/
 │   ├── 01-setup-host.sh
 │   ├── 02-nftables-apply.sh
-│   └── 03-verify.sh
+│   ├── 03-verify.sh
+│   └── single-nic/
+│       ├── 01-setup-host.sh
+│       ├── 02-nftables-apply.sh
+│       └── 03-verify.sh
 ├── adguard/
 │   ├── work/    (bind mount, 自动创建)
 │   └── conf/    (bind mount, 自动创建)
@@ -357,6 +366,154 @@ define BLOCKED_IPS = {
 # 安装 Grafana + Prometheus 做统一仪表盘
 docker compose -f docker-compose.extend.yml up -d
 ```
+
+## 单网口旁路网关方案
+
+当硬件只有一个网口 (老旧笔记本、NAS、树莓派、单网口小主机)，
+无法做串联网关时，使用此方案。
+
+### 拓扑对比
+
+```
+双网口 (串联)                         单网口 (旁路)
+┌──────────────┐                      ┌──────────────────────────┐
+│ N100         │                      │ Cudy 路由器 (正常模式)    │
+│ eth0→WAN     │                      │ DHCP/DNS/Gateway/NAT      │
+│ eth1→LAN     │                      │ 192.168.1.254             │
+│ NAT + filter │                      └────────┬─────────────────┘
+└──────────────┘                               │
+                                       同一 L2 广播域
+                                      ┌────────┴─────────────────┐
+                                      │ N100 单网口               │
+                                      │ IP: 192.168.1.1           │
+                                      │ filter only, 无 NAT       │
+                                      │ 路由: 0/0→192.168.1.254   │
+                                      └──────────────────────────┘
+```
+
+### 关键差异
+
+| | 双网口 (串联) | 单网口 (旁路) |
+|---|---|---|
+| N100 角色 | 主路由 (NAT+DHCP+DNS) | 旁路网关 (纯 filter, 路由器承担 NAT/DHCP) |
+| NAT | N100 做 SNAT/Masquerade | 路由器做 NAT, N100 不做 |
+| 回程流量 | 必经 N100 (对称) | 绕过 N100 直接回设备 |
+| Cudy 角色 | 纯 AP (DHCP 关闭) | 正常路由 (DHCP 开启) |
+| 部署复杂度 | 需物理改线 | 只改路由器 DHCP 设置 |
+| DNS 劫持 | ✅ | ✅ |
+| SNI 拦截 | ✅ | ✅ (SYN 经过 N100) |
+| IP 黑名单 | ✅ | ✅ (同上) |
+| 对外网影响 | 光猫断则全网断 | N100 宕机不影响外网 (回退到路由器) |
+
+### 非对称路由的影响
+
+```
+出站: 平板 → N100 (过滤) → 路由器 → Internet   ✅
+回程: Internet → 路由器 → 平板                  ⚠️
+```
+
+回程流量直接回到平板不经过 N100，但**不影响过滤功能**:
+- **DNS** — AdGuard 收到查询后直接回复，请求/响应都在同一 L2
+- **SNI** — TLS 握手首个 SYN 即被 DROP，连接无法建立
+- **IP 黑名单** — 出站包命中即 DROP，无回程也无妨
+
+### 部署步骤 (5 步)
+
+#### Step 1: 装好系统 + 依赖
+
+```bash
+apt update && apt upgrade -y
+apt install -y docker.io docker-compose-v2 nftables curl
+usermod -aG docker $USER
+```
+
+#### Step 2: 拷入项目文件
+
+```bash
+# 把 gateway/ 目录放到 N100 上
+scp -r gateway/ root@<n100-ip>:/opt/
+cd /opt/gateway
+```
+
+#### Step 3: 配置网口 (单网口版)
+
+```bash
+cd /opt/gateway/scripts/single-nic
+chmod +x *.sh
+bash 01-setup-host.sh
+```
+
+脚本会:
+- 检测单网口并确认
+- 自动检测路由器 IP (当前默认网关)
+- 设置 N100 静态 IP (路由器网段 .1 地址)
+- 添加默认路由指向路由器
+- 停用 DHCP client (避免 IP 冲突)
+- 启用 IP 转发
+- 更新 `nftables-single-nic.conf` 和 `docker-compose.yml` 中的接口名
+
+**⚠️ 执行后 N100 的 IP 会变成静态** (默认 `192.168.1.1`), 如果已通过 DHCP 连入, 连接会断。去路由器后台确认无误后继续。
+
+#### Step 4: 加载防火墙 + 启动容器
+
+```bash
+bash 02-nftables-apply.sh
+cd /opt/gateway
+docker compose up -d
+```
+
+#### Step 5: 配置路由器 DHCP (Cudy WR3600E)
+
+**Cudy 保持路由模式** (不切 AP), 修改:
+
+```
+网络 → LAN:
+  IP:        192.168.1.254
+  掩码:      255.255.255.0
+
+DHCP 服务器:
+  DHCP 范围:  192.168.1.100 - 200
+  默认网关:  192.168.1.1      (N100 IP)
+  DNS 服务器: 192.168.1.1      (N100 + AdGuard Home)
+```
+
+**工作原理**:
+1. 设备 DHCP 拿到网关 = 192.168.1.1 (N100)
+2. 设备 DNS = 192.168.1.1 (N100 + AdGuard)
+3. 设备访问外网 → 先经过 N100 (filter 生效) → 再经路由器出去
+
+改动后重启路由器, 所有设备重新获取 DHCP 即生效。
+
+#### 配置 AdGuard Home
+
+同双网口方案 [Step 6](#step-6-配置-adguard-home), 区别:
+- 管理界面地址变为 `http://192.168.1.1:3000`
+- **不需要开启 AdGuard 内置 DHCP** (由路由器担任)
+
+### 风险与缓解
+
+| 风险 | 影响 | 缓解 |
+|------|------|------|
+| N100 宕机 | 所有设备的网关和 DNS 都指向 N100 → **全网断网** | 路由器 DHCP 设 **备用 DNS** 为 `223.5.5.5`; 切网关需手动去路由器改回 `0.0.0.0` (自动探测 N100 存活可写 cron 脚本) |
+| N100 IP 被路由器 DHCP 分配给别人 | IP 冲突, 网关不可达 | 将 N100 的 MAC 在路由器 DHCP 中设为保留/排除, 或 N100 IP 放在 DHCP 范围外 |
+| AdGuard 容器未启动 | DNS 无法解析 | 路由器 DHCP 设备用 DNS, 但会绕过过滤 — 建议 `systemctl enable docker` + `restart: unless-stopped` |
+
+### 验证
+
+```bash
+bash scripts/single-nic/03-verify.sh
+```
+
+### 单网口模式 vs 双网口模式切换
+
+如需从单网口升级到双网口:
+1. 停止 nftables: `nft flush ruleset && systemctl stop nftables-gateway`
+2. 换用 `nftables.conf` (双网口版)
+3. 运行 `scripts/01-setup-host.sh` (双网口版, 配置 eth0/eth1)
+4. Cudy 切 AP 模式 + 物理换线
+5. `scripts/02-nftables-apply.sh` (双网口版)
+
+反向同理: 双网口降级到单网口即可撤下物理改线。
 
 ## 回滚
 
