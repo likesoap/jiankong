@@ -25,12 +25,9 @@
 
 ## 快速开始
 
-完整部署文档: [gateway/README.md](gateway/README.md)
-
 ```bash
 git clone https://github.com/likesoap/jiankong.git
 cd jiankong/gateway
-cat README.md
 ```
 
 ## 技术栈
