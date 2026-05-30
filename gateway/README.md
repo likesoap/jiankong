@@ -190,15 +190,20 @@ docker compose ps
    blocklistproject - Facebook
    ```
 
-4. 添加孩子设备:
+4. 加固防 DoH 绕过: 过滤器 → DNS 封锁清单 → 添加阻止列表 →
+   勾选 **AdGuard 官方 DoH/DoT 公共封锁清单**，从 DNS 根源
+   阻断浏览器内置的 443 端口 DoH 逃逸（配合 nftables 双保险）。
+
+5. 添加孩子设备:
    - 设置 → 客户端设置 → 添加客户端
    - MAC 地址: 平板 WLAN MAC
+   - **⚠️ 关键: 先在平板 Wi-Fi 设置中将"隐私/MAC 地址类型"由"使用随机 MAC"改为"使用设备 MAC"，否则 AdGuard 换 MAC 后无法持续识别**
    - 标签: `kids`
    - 勾选 "屏蔽成人内容"
    - 勾选 "使用安全搜索"
    - 添加时间表 (例: 每天 21:00-07:00 拦截所有流量)
 
-5. 配置 DHCP (可选):
+6. 配置 DHCP (可选):
    - 如果 Cudy 关了 DHCP，在这里开启 AdGuard 的 DHCP
    - 范围: `10.0.0.100 - 10.0.0.200`
    - 网关: `10.0.0.1`
@@ -271,16 +276,21 @@ docker compose pull ntopng && docker compose up -d ntopng
 
 ### 添加新设备到监控
 
-1. 获取设备 MAC 地址:
+1. **前置: 禁用随机 MAC** — 安卓默认启用随机 MAC, 必须先关掉:
+   - 安卓: Wi-Fi 设置 → 已连 Wi-Fi → 隐私 → 选择 "使用设备 MAC"
+   - iOS: 设置 → 无线局域网 → 已连网络 → 关闭 "私有 Wi-Fi 地址"
+   - **不关意味着 MAC 随时变化 → AdGuard 识别丢失 → 孩子逃逸到 default 组无法管控**
+
+2. 获取设备真实 MAC 地址:
    - 安卓平板: 设置 → 关于 → WLAN MAC 地址
    - iOS: 设置 → 通用 → 关于本机 → Wi-Fi 地址
-2. AdGuard Home → 客户端 → 添加客户端:
+3. AdGuard Home → 客户端 → 添加客户端:
    - 标识符: `AA:BB:CC:DD:EE:FF`
    - 标签: `kids`
    - 勾选 "屏蔽成人内容" + "使用安全搜索"
    - 设置时间表 (如: 每天 21:00-07:00 拦截)
-3. 如需固定 IP (方便 ntopng 对应): DNS → DHCP → 静态租约 → 添加 MAC→IP 绑定
-4. 自此该设备所有 DNS 查询走 kids 策略，**改 IP 不影响规则** (识别基于 MAC)
+4. 如需固定 IP (方便 ntopng 对应): DNS → DHCP → 静态租约 → 添加 MAC→IP 绑定
+5. 自此该设备所有 DNS 查询走 kids 策略，**改 IP 不影响规则** (识别基于 MAC)
 
 ### 移除设备
 
@@ -294,6 +304,20 @@ docker compose pull ntopng && docker compose up -d ntopng
 2. 显示该设备所有 DNS 查询时间线 (域名 / 时间 / 是否被拦截)
 3. ntopng → Hosts → 选目标 IP → 查看实时流量 + 历史流量趋势
 
+### 家长一键禁止/解禁 (比改时间表更快)
+
+无需进时间表编辑, 适合即时操作:
+
+**一键禁止 (立即断网):**
+1. 手机浏览器打开 AdGuard Home 后台
+2. 设置 → 客户端设置 → 找到孩子设备 → 编辑
+3. 勾选 **"阻止该客户端"** (Block this client) 并保存
+4. 效果: 该设备所有 DNS 请求瞬间锁死, 表现为立即断网
+
+**一键解禁 (恢复上网):**
+1. 同路径, **取消勾选** "阻止该客户端" 并保存
+2. 网络瞬间恢复
+
 ## 防绕过策略
 
 本方案的核心防御点是**强制所有 DNS 查询经过 AdGuard Home**，
@@ -302,12 +326,23 @@ docker compose pull ntopng && docker compose up -d ntopng
 | 场景 | 是否可绕过 | 原因 |
 |------|:---:|------|
 | 改平板的 IP 地址 | 否 | AdGuard 用 **MAC** 而非 IP 识别客户端; MAC 不变, 策略不变 |
-| 改平板的 MAC 地址 | 否 | 新 MAC 不在 DHCP 注册表, 拿不到 IP (或落入 default 组, 无特殊权限) |
+| 改平板的 MAC 地址 | 否 | 前置锁死设备 MAC (关闭随机 MAC 功能); 若强行重置生成新 MAC, 启用 nftables netdev MAC 白名单后未登记设备直接 DROP |
 | 手动设 DNS 为 8.8.8.8 | 否 | nftables 劫持所有 53 端口流量 → AdGuard Home |
-| 使用 DoH (DNS over HTTPS) | 部分 | 已知 DoH IP 被封锁 + AdGuard 劫持 53 端口生效 |
+| 使用 DoH (DNS over HTTPS) | 否 | nftables 封锁 853 端口; AdGuard 内置 DoH/DoT 封锁清单阻断 443 端口隐蔽外发, 双重保险 |
 | 用 IP 直连不良网站 | 否 | nftables SNI 检查: TLS 握手阶段读取 Server Name → 匹配黑名单 → DROP |
 | 使用 VPN/代理 | 部分 | 需手动添加 VPN IP 到 BLOCKED_IPS; 可封锁常见 VPN 端口 (1194/1723/500/4500) |
 | 改路由器配置还原 | 否 | Cudy 已降级为纯 AP, DHCP/NAT/路由功能全部由 N100 接管 |
+
+### TLS 1.3 ECH (加密 SNI) 风险说明
+
+TLS 1.3 逐步推广 ECH (Encrypted ClientHello), 会将 SNI 加密, 导致
+nftables 内核级 SNI 匹配失效。这是未来潜在风险, 当前覆盖率为:
+- **国内主流网站** — 绝大多数未启用 ECH, SNI 匹配有效
+- **国外大站** (Google/Cloudflare) — 部分已启用, 靠第一道防线兜底:
+  AdGuard DNS 已拦截域名 → 无法解析 IP → 无从直连
+
+应对方案: 当 ECH 普及后, 可叠加 DNS-over-HTTPS 劫持 (443 端口 SNI 匹配
+已知 DoH 域名) 或在 N100 上部署透明代理做 SSL 中间人检测。
 
 ### 核心: MAC 识别，非 IP 识别
 
@@ -453,6 +488,31 @@ docker compose -f docker-compose.extend.yml up -d
 - **SNI** — TLS 握手首个 SYN 即被 DROP，连接无法建立
 - **IP 黑名单** — 出站包命中即 DROP，无回程也无妨
 
+### 单网口性能分析
+
+单网口旁路模式下, 上行流量在同一 NIC 进出两次 (hairpin), 带宽占用翻倍:
+
+```
+上行: 设备 → 交换机 → N100 eth0(进) → filter → N100 eth0(出) → 交换机 → 路由器 → Internet
+下行: Internet → 路由器 → 交换机 → 设备          ← 不经过 N100
+```
+
+| 宽带套餐 | 上行速率 | NIC 实际负载 | 1GbE 占比 | 瓶颈？ |
+|---------|---------|------------|---------|:---:|
+| 100M↓ / 20M↑ | 20M | 40M | 4% | 否 |
+| 300M↓ / 30M↑ | 30M | 60M | 6% | 否 |
+| 500M↓ / 50M↑ | 50M | 100M | 10% | 否 |
+| 1000M↓ / 100M↑ | 100M | 200M | 20% | 否 |
+| 1000M↑↓ 对称 | 1000M | **2000M** | **200%** | **是** |
+
+**结论**: 99% 的家用宽带 (上行 ≤100M) 仅占 1GbE 带宽的 <20%,
+日常使用无感知折扣。唯一有影响的场景是千兆对称宽带, 此时需 2.5GbE
+单网口或切回双网口串联模式。
+
+nftables forward 规则为 O(1) 内核级处理, N100 可线速转发数 Gbps;
+SNI 匹配仅检查 TCP SYN 包, 不碰后续数据流; conntrack 表高峰 5000-10000
+并发连接, N100 16GB 内存完全无感。
+
 ### 部署步骤 (5 步)
 
 #### Step 1: 装好系统 + 依赖
@@ -518,6 +578,10 @@ DHCP 服务器:
 2. 设备 DNS = 192.168.1.1 (N100 + AdGuard)
 3. 设备访问外网 → 先经过 N100 (filter 生效) → 再经路由器出去
 
+> ⚠️ **重要**: DNS 服务器**必须**填 `192.168.1.1` (AdGuard Home)。
+> 切勿填写 `223.5.5.5` 等外网 DNS, 否则终端直接绕开 AdGuard,
+> 客户端识别、分组策略、查询日志全部失效。
+
 改动后重启路由器, 所有设备重新获取 DHCP 即生效。
 
 #### 配置 AdGuard Home
@@ -532,7 +596,8 @@ DHCP 服务器:
 |------|------|------|
 | N100 宕机 | 所有设备的网关和 DNS 都指向 N100 → **全网断网** | 路由器 DHCP 设 **备用 DNS** 为 `223.5.5.5`; 切网关需手动去路由器改回 `0.0.0.0` (自动探测 N100 存活可写 cron 脚本) |
 | N100 IP 被路由器 DHCP 分配给别人 | IP 冲突, 网关不可达 | 将 N100 的 MAC 在路由器 DHCP 中设为保留/排除, 或 N100 IP 放在 DHCP 范围外 |
-| AdGuard 容器未启动 | DNS 无法解析 | 路由器 DHCP 设备用 DNS, 但会绕过过滤 — 建议 `systemctl enable docker` + `restart: unless-stopped` |
+| AdGuard 容器未启动 | DNS 无法解析 | 建议 `systemctl enable docker` + `restart: unless-stopped` |
+| ntopng 全流量审计消耗 IO/内存 | SSD 磨损, 内存耗尽 | docker-compose.yml 已设 `mem_limit: 1g` + JSON 日志轮转 (`max-size: 10m, max-file: 3`) |
 
 ### 验证
 

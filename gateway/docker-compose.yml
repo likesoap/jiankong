@@ -20,6 +20,7 @@ services:
     image: ntop/ntopng:latest
     restart: unless-stopped
     network_mode: host
+    mem_limit: 1g
     command:
       - --community
       - -i=eth1
