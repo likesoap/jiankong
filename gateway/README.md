@@ -35,6 +35,42 @@
 4. **性价比优先** — N100 小主机 ~¥600，功耗 ~10W，性能可同时跑
    网关 + 监控 + 未来扩展 (Home Assistant、NAS 等)
 
+## 硬件兼容性
+
+### 支持
+
+任何能装标准 Linux 的 x86_64 / ARM64 设备均可:
+
+| 类别 | 举例 | 适用模式 |
+|------|------|----------|
+| x86 软路由/小主机 | N100, N95, J4125 | 双网口(串联) 或 单网口(旁路) |
+| ARM 开发板 | NanoPi R4S/R2S, 树莓派 4/5, Orange Pi | 双网口 或 单网口(旁路) |
+| 旧 PC/笔记本 | 退役台式机/笔记本 + USB 网卡 | 视网口数而定 |
+| 虚拟机 | Proxmox/ESXi/VMware 上的 Linux VM | 双网口(直通/桥接) 或 单网口(旁路) |
+
+### 不兼容: macOS / Mac Mini
+
+**macOS (包括搭载 M 芯片或 Intel 的 Mac Mini) 不能用作此方案的网关设备。**
+
+| 问题 | 详情 |
+|------|------|
+| Docker `network_mode: host` | macOS 上 Docker 运行在 Hypervisor 层的 Linux VM 中, 容器和宿主机不在同一网络命名空间。`network_mode: host` 不生效, AdGuard 无法直接在宿主机网口上监听 53 端口 |
+| DNS 劫持无法实现 | nftables 的 `redirect to :53` 规则将 DNS 流量转向宿主机网口的 53 端口。macOS 不具备 Linux 的 nftables, macOS 自身的 `pf` 防火墙不支持 `redirect` 表达式和 SNI 匹配 |
+| SNI 过滤不可用 | macOS 的 `pf` 是 BSD 防火墙, 没有 `tls sni` 匹配能力, 无法在 TLS 握手阶段按域名拦截 |
+| 核心依赖全在 Linux 内核 | nftables + redirect + SNI match + netdev ingress + ipset 全部是 Linux 内核特性, macOS 一个都不支持 |
+
+**变通方案:**
+
+| 方法 | 评估 |
+|------|------|
+| Mac Mini 格掉装 Ubuntu/Debian (仅 Intel 机型) | ✅ 可行, 方案完全一致 |
+| Mac Mini 上跑 Linux 虚拟机 (UTM/Parallels) | ⚠️ 仅能走单网口旁路, 需多一层 bridge 配置, 不推荐 |
+| Mac Mini 只做监控面板 (AdGuard + ntopng) | ⚠️ Web GUI 可用, 但过滤和 DNS 劫持全丢失, 只剩半套方案 |
+| 放弃 Mac Mini, 另购 N100 小主机 | ✅ ~¥600, 功耗 10W, 完整功能 |
+
+**如果你手头只有 Mac Mini:** Intel 版本建议直接格掉装 Ubuntu/Debian, M 芯片版本建议拿来干别的事,
+网关另用 N100 或 NanoPi R4S。
+
 ## 硬件
 
 | 设备 | 角色 | 网口 |
