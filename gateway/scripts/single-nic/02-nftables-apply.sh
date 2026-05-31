@@ -23,6 +23,9 @@ echo ">>> 加载 nftables 规则..."
 nft -f "$CONF"
 echo "  已加载 $(nft list ruleset | wc -l) 行规则"
 
+# 禁用 Debian 原生 nftables.service, 避免和我们的规则冲突
+systemctl disable --now nftables 2>/dev/null || true
+
 echo ""
 echo ">>> 持久化 (systemd)..."
 cat > /etc/systemd/system/nftables-gateway.service << SVC
