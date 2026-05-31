@@ -1,8 +1,9 @@
 # Gateway — N100 网关 + 多层过滤 (双网口 / 单网口)
 
 > **方案选择**:
-> - **双网口设备 (N100 软路由/多网口主机)**? 按下方主流程 (串联网关，推荐)
+> - **零改动，纯 DNS 过滤**? 跳转到 [纯 DNS 模式 (零部署)](#纯-dns-模式-零部署)
 > - **单网口设备 (旧电脑/NAS/树莓派)**? 跳转到 [单网口旁路网关方案](#单网口旁路网关方案)
+> - **双网口设备 (N100 软路由/多网口主机)**? 按下方主流程 (串联网关，最完整)
 
 ## 项目背景
 
@@ -34,6 +35,29 @@
    nftables 组合形成完整方案
 4. **性价比优先** — N100 小主机 ~¥600，功耗 ~10W，性能可同时跑
    网关 + 监控 + 未来扩展 (Home Assistant、NAS 等)
+
+## 三种模式功能对比
+
+| 功能 | 双网口串联 | 单网口旁路 | 纯 DNS |
+|------|:---:|:---:|:---:|
+| DNS 域名黑/白名单 | ✅ | ✅ | ✅ |
+| 纯 IP 直连拦截 | ✅ | ✅ | ❌ |
+| IP 黑名单 (nftables) | ✅ | ✅ | ❌ |
+| SNI 过滤 (TLS 握手域名匹配) | ✅ | ✅ | ❌ |
+| DNS 强制劫持 (防改 8.8.8.8) | ✅ | ✅ | ❌ |
+| DoH / DoT 端口封锁 | ✅ | ✅ | ❌ |
+| MAC 白名单 (严格模式) | ✅ | ✅ | ❌ |
+| AdGuard Web GUI 管理 | ✅ | ✅ | ✅ |
+| 查询日志 / 上网记录 | ✅ | ✅ | ✅ |
+| 客户端分组 (kids / default) | ✅ | ✅ | ✅ |
+| 时间段控制 (限时上网) | ✅ | ✅ | ✅ |
+| 一键禁止 / 解禁 | ✅ | ✅ | ✅ |
+| ntopng 流量监控 | ✅ | ✅ | ✅ |
+| 需要双网口硬件 | 是 | 否 | 否 |
+| 需要物理改线 | 是 | 否 | 否 |
+| 需要改路由器 DHCP | NAT 接管 | 网关 + DNS | 仅 DNS |
+| 对网速影响 | 无 | 上行 hairpin ~20% | 零 |
+| 部署复杂度 | 高 | 中 | 低 |
 
 ## 硬件兼容性
 
@@ -627,6 +651,65 @@ bash scripts/single-nic/03-verify.sh
 5. `scripts/02-nftables-apply.sh` (双网口版)
 
 反向同理: 双网口降级到单网口即可撤下物理改线。
+
+## 纯 DNS 模式 (零部署)
+
+当只想用 DNS 过滤、不将设备流量经过 N100 时使用此模式。
+零硬件要求、零网络改动、零性能影响。
+
+### 拓扑
+
+```
+  [平板] ←──→ [Cudy 路由器] ←──→ [Internet]
+                DHCP DNS:
+                N100 IP           ↑ 流量不经过 N100
+                  ↓
+             [N100 单网口]
+             AdGuard Home (纯 DNS)
+```
+
+### 谁适合
+
+- 孩子不会 / 还没学会改网络设置
+- 不想花一分钱、不想改任何线、今天就跑起来
+- **随时可升级**: 跑 `nftables-apply.sh` + 改路由器 DHCP 网关即切到[单网口旁路模式](#单网口旁路网关方案)
+
+### 部署 (仅 2 步)
+
+**Step 1:** N100 部署 Docker + AdGuard Home (参照[快速部署 Step 1-6](#快速部署-7-步)，**跳过** Step 3-4 的网络和防火墙配置)
+
+```bash
+apt update && apt install -y docker.io docker-compose-v2 curl
+git clone https://github.com/likesoap/jiankong.git
+cp -r jiankong/gateway /opt/
+cd /opt/gateway
+docker compose up -d
+# 浏览器打开 http://<N100-IP>:3000 配置 AdGuard Home
+```
+
+**Step 2:** 路由器 DHCP DNS 指向 N100 IP
+
+```
+Cudy 后台 → DHCP 服务器 → DNS 服务器:
+  主 DNS: <N100 的 IP>
+```
+
+> ⚠️ **限制**: 孩子手动改 DNS 为 8.8.8.8、使用 Chrome 内置 DoH、
+> 或用纯 IP 直连——全部绕开。上述场景出现时需升级到单网口旁路模式。
+
+### 升级路径
+
+```
+纯 DNS ──→ 单网口旁路 (加 nftables 防火墙)
+         ──→ 双网口串联 (加物理改线 + 第二个网口)
+```
+
+```bash
+# 从纯 DNS 升级到单网口旁路:
+cd /opt/gateway/scripts/single-nic
+bash 02-nftables-apply.sh                    # 加载防火墙
+# 然后改路由器 DHCP: 网关 → N100 IP，DNS → N100 IP
+```
 
 ## 回滚
 
