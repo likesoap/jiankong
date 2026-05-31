@@ -98,7 +98,7 @@
   适合家长快速应对 (比进时间表编辑快得多)
 - **自托管无订阅** — 完全免费，数据留在本地 N100
 - 配合 nftables 多层过滤，是唯一能从
-  [纯 DNS](#纯-dns-模式-零部署) 平滑升级到 [旁路网关](#单网口旁路网关方案) / [串联网关](#快速部署-7-步) 的方案
+  [纯 DNS](#纯-dns-模式-零部署) 平滑升级到 [旁路网关](#单网口旁路网关方案) / [双网口串联](#双网口串联网关方案推荐) 的方案
 
 如果需要从 AdGuard 切换到 Pi-hole 或 Technitium，改 `docker-compose.yml`
 替换容器即可，nftables 规则完全不受影响。
@@ -236,7 +236,10 @@ gateway/
     └── data/    (bind mount, 自动创建)
 ```
 
-## 快速部署 (7 步)
+## 双网口串联网关方案（推荐）
+
+最完整的多层过滤方案，适合双网口设备 (N100 软路由 / R4S)。
+需要物理改线，部署后不可绕过。
 
 ### Step 1: N100 装好 Debian 12
 
@@ -493,114 +496,6 @@ docker compose -f docker-compose.extend.yml up -d
 | 使用 VPN/代理 | 部分 | 需手动添加 VPN IP 到 BLOCKED_IPS; 可封锁常见 VPN 端口 (1194/1723/500/4500) |
 | 改路由器配置还原 | 否 | Cudy 已降级为纯 AP, DHCP/NAT/路由功能全部由 N100 接管 |
 
-<details>
-<summary>🔐 TLS 1.3 ECH (加密 SNI) 风险说明 (点击展开)</summary>
-
-TLS 1.3 逐步推广 ECH (Encrypted ClientHello), 会将 SNI 加密, 导致
-nftables 内核级 SNI 匹配失效。这是未来潜在风险, 当前覆盖率为:
-- **国内主流网站** — 绝大多数未启用 ECH, SNI 匹配有效
-- **国外大站** (Google/Cloudflare) — 部分已启用, 靠第一道防线兜底:
-  AdGuard DNS 已拦截域名 → 无法解析 IP → 无从直连
-
-应对方案: 当 ECH 普及后, 可叠加 DNS-over-HTTPS 劫持 (443 端口 SNI 匹配
-已知 DoH 域名) 或在 N100 上部署透明代理做 SSL 中间人检测。
-
-</details>
-
-<details>
-<summary>🔑 核心: MAC 识别，非 IP 识别</summary>
-
-AdGuard Home 通过 **MAC 地址**追踪设备。只要 AdGuard 的 DHCP 服务运行，
-它维护的是 MAC→IP 映射表。**孩子改了 IP 地址不会逃出 kids 分组的规则**。
-
-</details>
-
-<details>
-<summary>📡 为什么 AP 模式下 MAC 透传有效</summary>
-
-关键在于 Cudy 的工作模式：
-
-```
-路由模式 (NAT)                       AP 模式 (Bridge/L2)
-┌─────────────────┐                  ┌─────────────────┐
-│ 平板 MAC: AA    │                  │ 平板 MAC: AA    │
-│       ↓         │                  │       ↓         │
-│   Cudy NAT      │                  │   Cudy L2 桥    │
-│  源MAC → BB     │  ← 被替换        │  源MAC → AA     │  ← 原样保留
-│       ↓         │                  │       ↓         │
-│  N100 看到: BB  │                  │  N100 看到: AA  │
-└─────────────────┘                  └─────────────────┘
-  所有 WiFi 设备                       每个设备独立 MAC
-  对外显示同一个 MAC
-```
-
-路由器在 **路由/NAT 模式**下是三层设备，会对出站帧做 SNAT/Masquerade，
-**源 MAC 被替换为路由器自身的 WAN 口 MAC**。此时 N100 看到的永远是 Cudy
-的 MAC，无法区分不同设备。
-
-而 **AP 模式**下 Cudy 退化为纯二层交换机：WiFi 帧转以太网帧时
-**源 MAC 地址原样保留**，不做任何改写。N100 的 eth1 可以直接看到每个
-WiFi 客户端的真实 MAC，MAC filter 完全有效。
-
-部署后可在 N100 上验证:
-```bash
-ip neigh show dev eth1    # 应看到所有 WiFi 设备的 MAC + IP
-```
-
-</details>
-
-<details>
-<summary>🔒 可选: MAC 白名单 (严格模式)</summary>
-
-如需拒绝未登记的陌生设备 (如孩子的第二台平板), 编辑 `nftables.conf`,
-取消底部 `table netdev filter` 的注释。效果:
-
-```
-已登记 MAC → 正常上网 (走对应分组策略)
-未登记 MAC → 所有流量 DROP, 连不上网
-```
-
-访客需家长手动在 nftables 中添加 MAC 才能联网。
-
-</details>
-
-<details>
-<summary>🔌 常见 VPN 端口速查</summary>
-
-如需封锁 VPN, 在 `nftables.conf` 的 `chain forward` 中追加:
-
-```nft
-# VPN 端口封锁
-tcp dport { 1194, 1723, 500, 4500, 1701 } log prefix "VPN-blocked: " drop
-udp dport { 1194, 500, 4500, 1701 } log prefix "VPN-blocked: " drop
-```
-
-然后 `systemctl reload nftables-gateway`。
-
-</details>
-
-<details>
-<summary>📋 技术说明: nftables vs iptables</summary>
-
-本方案全程使用 **nftables**，不使用 iptables:
-
-| | iptables | nftables |
-|---|---|---|
-| 内核状态 | 遗留框架，走兼容层 | Linux 3.13+ 原生主框架，iptables 底层也已是 nf_tables |
-| SNI/TLS 过滤 | ❌ 不支持 | ✅ `tls sni` 表达式，TLS 握手阶段域名匹配 |
-| 规则性能 | 逐条遍历 O(n) | 集合匹配 O(1)，规则集原子更新 |
-| 语法 | 链式调用，工具分散 (iptables/ip6tables/arptables/ebtables) | 统一框架，一个 `nft` 命令管所有 |
-| 发行版支持 | Debian 10+ / Ubuntu 20.04+ 已默认迁移到 nftables | ✅ |
-
-我们涉及 DNS 劫持 (`redirect`)、IP 黑名单 (`ip daddr`)、SNI 匹配 (`tls sni`)、
-MAC 白名单 (`ethernet saddr`) 四种过滤，全部由 nftables 一个框架完成，
-iptables 在 IPv4/IPv6 间还需要分 `iptables` 和 `ip6tables` 两套规则。
-
-部署时 `02-nftables-apply.sh` 会自动禁用 Debian 原生 `nftables.service`
-（如果存在），避免和我们的规则冲突。
-
-</details>
-
 ## 单网口旁路网关方案
 
 当硬件只有一个网口 (老旧笔记本、NAS、树莓派、单网口小主机)，
@@ -803,7 +698,7 @@ bash scripts/single-nic/03-verify.sh
 
 ### 部署 (仅 2 步)
 
-**Step 1:** N100 部署 Docker + AdGuard Home (参照[快速部署 Step 1-6](#快速部署-7-步)，**跳过** Step 3-4 的网络和防火墙配置)
+**Step 1:** N100 部署 Docker + AdGuard Home (参照[双网口方案 Step 1-6](#双网口串联网关方案推荐)，**跳过** Step 3-4 的网络和防火墙配置)
 
 ```bash
 apt update && apt install -y docker.io docker-compose-v2 curl
@@ -854,3 +749,113 @@ cd /opt/gateway && docker compose down
 # 恢复 N100 网口
 # 删除 /etc/netplan/01-gateway.yaml 或恢复备份
 ```
+
+## 扩展阅读
+
+<details>
+<summary>TLS 1.3 ECH (加密 SNI) 风险说明</summary>
+
+TLS 1.3 逐步推广 ECH (Encrypted ClientHello), 会将 SNI 加密, 导致
+nftables 内核级 SNI 匹配失效。这是未来潜在风险, 当前覆盖率为:
+- **国内主流网站** — 绝大多数未启用 ECH, SNI 匹配有效
+- **国外大站** (Google/Cloudflare) — 部分已启用, 靠第一道防线兜底:
+  AdGuard DNS 已拦截域名 → 无法解析 IP → 无从直连
+
+应对方案: 当 ECH 普及后, 可叠加 DNS-over-HTTPS 劫持 (443 端口 SNI 匹配
+已知 DoH 域名) 或在 N100 上部署透明代理做 SSL 中间人检测。
+
+</details>
+
+<details>
+<summary>核心: MAC 识别，非 IP 识别</summary>
+
+AdGuard Home 通过 **MAC 地址**追踪设备。只要 AdGuard 的 DHCP 服务运行，
+它维护的是 MAC→IP 映射表。**孩子改了 IP 地址不会逃出 kids 分组的规则**。
+
+</details>
+
+<details>
+<summary>为什么 AP 模式下 MAC 透传有效</summary>
+
+关键在于 Cudy 的工作模式：
+
+```
+路由模式 (NAT)                       AP 模式 (Bridge/L2)
+┌─────────────────┐                  ┌─────────────────┐
+│ 平板 MAC: AA    │                  │ 平板 MAC: AA    │
+│       ↓         │                  │       ↓         │
+│   Cudy NAT      │                  │   Cudy L2 桥    │
+│  源MAC → BB     │  ← 被替换        │  源MAC → AA     │  ← 原样保留
+│       ↓         │                  │       ↓         │
+│  N100 看到: BB  │                  │  N100 看到: AA  │
+└─────────────────┘                  └─────────────────┘
+  所有 WiFi 设备                       每个设备独立 MAC
+  对外显示同一个 MAC
+```
+
+路由器在 **路由/NAT 模式**下是三层设备，会对出站帧做 SNAT/Masquerade，
+**源 MAC 被替换为路由器自身的 WAN 口 MAC**。此时 N100 看到的永远是 Cudy
+的 MAC，无法区分不同设备。
+
+而 **AP 模式**下 Cudy 退化为纯二层交换机：WiFi 帧转以太网帧时
+**源 MAC 地址原样保留**，不做任何改写。N100 的 eth1 可以直接看到每个
+WiFi 客户端的真实 MAC，MAC filter 完全有效。
+
+部署后可在 N100 上验证:
+```bash
+ip neigh show dev eth1    # 应看到所有 WiFi 设备的 MAC + IP
+```
+
+</details>
+
+<details>
+<summary>可选: MAC 白名单 (严格模式)</summary>
+
+如需拒绝未登记的陌生设备 (如孩子的第二台平板), 编辑 `nftables.conf`,
+取消底部 `table netdev filter` 的注释。效果:
+
+```
+已登记 MAC → 正常上网 (走对应分组策略)
+未登记 MAC → 所有流量 DROP, 连不上网
+```
+
+访客需家长手动在 nftables 中添加 MAC 才能联网。
+
+</details>
+
+<details>
+<summary>常见 VPN 端口速查</summary>
+
+如需封锁 VPN, 在 `nftables.conf` 的 `chain forward` 中追加:
+
+```nft
+# VPN 端口封锁
+tcp dport { 1194, 1723, 500, 4500, 1701 } log prefix "VPN-blocked: " drop
+udp dport { 1194, 500, 4500, 1701 } log prefix "VPN-blocked: " drop
+```
+
+然后 `systemctl reload nftables-gateway`。
+
+</details>
+
+<details>
+<summary>技术说明: nftables vs iptables</summary>
+
+本方案全程使用 **nftables**，不使用 iptables:
+
+| | iptables | nftables |
+|---|---|---|
+| 内核状态 | 遗留框架，走兼容层 | Linux 3.13+ 原生主框架，iptables 底层也已是 nf_tables |
+| SNI/TLS 过滤 | ❌ 不支持 | ✅ `tls sni` 表达式，TLS 握手阶段域名匹配 |
+| 规则性能 | 逐条遍历 O(n) | 集合匹配 O(1)，规则集原子更新 |
+| 语法 | 链式调用，工具分散 (iptables/ip6tables/arptables/ebtables) | 统一框架，一个 `nft` 命令管所有 |
+| 发行版支持 | Debian 10+ / Ubuntu 20.04+ 已默认迁移到 nftables | ✅ |
+
+我们涉及 DNS 劫持 (`redirect`)、IP 黑名单 (`ip daddr`)、SNI 匹配 (`tls sni`)、
+MAC 白名单 (`ethernet saddr`) 四种过滤，全部由 nftables 一个框架完成，
+iptables 在 IPv4/IPv6 间还需要分 `iptables` 和 `ip6tables` 两套规则。
+
+部署时 `02-nftables-apply.sh` 会自动禁用 Debian 原生 `nftables.service`
+（如果存在），避免和我们的规则冲突。
+
+</details>
