@@ -165,7 +165,8 @@
 | 旧 PC/笔记本 | 退役台式机/笔记本 + USB 网卡 | 视网口数而定 |
 | 虚拟机 | Proxmox/ESXi/VMware 上的 Linux VM | 双网口(直通/桥接) 或 单网口(旁路) |
 
-### 不兼容: macOS / Mac Mini
+<details>
+<summary>⚠️ 不兼容: macOS / Mac Mini (点击展开)</summary>
 
 **macOS (包括搭载 M 芯片或 Intel 的 Mac Mini) 不能用作此方案的网关设备。**
 
@@ -187,6 +188,8 @@
 
 **如果你手头只有 Mac Mini:** Intel 版本建议直接格掉装 Ubuntu/Debian, M 芯片版本建议拿来干别的事,
 网关另用 N100 或 NanoPi R4S。
+
+</details>
 
 ## 硬件拓扑
 
