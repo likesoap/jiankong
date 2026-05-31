@@ -397,6 +397,25 @@ udp dport { 1194, 500, 4500, 1701 } log prefix "VPN-blocked: " drop
 
 然后 `systemctl reload nftables-gateway`。
 
+### 技术说明: nftables vs iptables
+
+本方案全程使用 **nftables**，不使用 iptables:
+
+| | iptables | nftables |
+|---|---|---|
+| 内核状态 | 遗留框架，走兼容层 | Linux 3.13+ 原生主框架，iptables 底层也已是 nf_tables |
+| SNI/TLS 过滤 | ❌ 不支持 | ✅ `tls sni` 表达式，TLS 握手阶段域名匹配 |
+| 规则性能 | 逐条遍历 O(n) | 集合匹配 O(1)，规则集原子更新 |
+| 语法 | 链式调用，工具分散 (iptables/ip6tables/arptables/ebtables) | 统一框架，一个 `nft` 命令管所有 |
+| 发行版支持 | Debian 10+ / Ubuntu 20.04+ 已默认迁移到 nftables | ✅ |
+
+我们涉及 DNS 劫持 (`redirect`)、IP 黑名单 (`ip daddr`)、SNI 匹配 (`tls sni`)、
+MAC 白名单 (`ethernet saddr`) 四种过滤，全部由 nftables 一个框架完成，
+iptables 在 IPv4/IPv6 间还需要分 `iptables` 和 `ip6tables` 两套规则。
+
+部署时 `02-nftables-apply.sh` 会自动禁用 Debian 原生 `nftables.service`
+（如果存在），避免和我们的规则冲突。
+
 ## 自定义
 
 ### 增加 SNI 黑名单域名
