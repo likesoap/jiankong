@@ -405,12 +405,24 @@ define BLOCKED_IPS = {
 - 上学日: 07:00-08:00 / 18:00-21:00 (仅允许这些时段)
 - 周末: 07:00-21:00
 
-#### 扩展监控 (可选)
+#### 扩展监控仪表盘 (可选)
+
+无需此步骤 Web GUI (AdGuard + ntopng) 即可正常使用。
+以下用于将多套监控整合为一个 Grafana 聚合仪表盘。
 
 ```bash
-# 安装 Grafana + Prometheus 做统一仪表盘
+cd /opt/gateway
 docker compose -f docker-compose.extend.yml up -d
 ```
+
+**启动后**:
+- Grafana: `http://10.0.0.1:3200` (匿名登录，只读 Viewer 角色)
+- Prometheus 自动采集 AdGuard 的 DNS 查询指标
+  (请求量 / 拦截率 / 延迟 / 客户端排行 / 上游 DNS 响应时间)
+- 可在 Grafana 内添加 ntopng 等其他数据源做自定义图表
+
+> **提示**: 如果不需要聚合仪表盘，`docker-compose.extend.yml` 完全可跳过。
+> `docker-compose.yml` 已提供 AdGuard Home + ntopng 两个独立 Web 面板。
 
 ## Web 面板地址
 
