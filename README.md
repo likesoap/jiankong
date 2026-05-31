@@ -419,7 +419,7 @@ docker compose -f docker-compose.extend.yml up -d
 - Grafana: `http://10.0.0.1:3200` (匿名登录，只读 Viewer 角色)
 - Prometheus 自动采集 AdGuard 的 DNS 查询指标
   (请求量 / 拦截率 / 延迟 / 客户端排行 / 上游 DNS 响应时间)
-- 可在 Grafana 内添加 ntopng 等其他数据源做自定义图表
+- AdGuard + ntopng 已有独立 Web 面板，Grafana 为可选的聚合视图
 
 > **提示**: 如果不需要聚合仪表盘，`docker-compose.extend.yml` 完全可跳过。
 > `docker-compose.yml` 已提供 AdGuard Home + ntopng 两个独立 Web 面板。
@@ -430,6 +430,7 @@ docker compose -f docker-compose.extend.yml up -d
 |------|------|------|
 | AdGuard Home | `http://10.0.0.1` | DNS 过滤, 查询日志, 黑白名单, 客户端规则 |
 | ntopng | `http://10.0.0.1:3001` | 实时流量, per-device 统计, 活跃时长估算 |
+| Grafana | `http://10.0.0.1:3200` | AdGuard DNS 聚合仪表盘 (需 `-f docker-compose.extend.yml`) |
 
 ## 设备管理
 
